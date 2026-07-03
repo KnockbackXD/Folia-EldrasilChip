@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KnockbackXD <zuka3827@gmail.com>
+Date: Fri, 3 Jul 2026 18:38:09 +0530
+Subject: [PATCH] Add oweTicks entity Simulate config
+
+
+diff --git a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+index 1d1baac8d9eff40ff41719b213fff1eab778bd3e..cd0b76fcbb970d384129abfc5b81985206f740d2 100644
+--- a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+@@ -159,6 +159,25 @@ public class WorldConfiguration extends ConfigurationPart {
+             public boolean tick = true;
+         }
+ 
++        public OweTicks oweTicks;
++
++        public class OweTicks extends ConfigurationPart {
++            @Comment("Experimental Folia entity simulation. When enabled, overloaded regions may skip some inactive mob ticks and record the skipped work as oweTicks.")
++            public boolean enabled = false;
++            @Comment("A region is considered overloaded when its 5 second average MSPT is at or above this value. Set to 0 to ignore MSPT.")
++            public double triggerMspt = 45.0D;
++            @Comment("A region is considered overloaded when its 5 second average TPS is at or below this value. Set to 0 to ignore TPS.")
++            public double triggerTps = 19.2D;
++            @Comment("Only mobs inactive for at least this many ticks are eligible for oweTicks skipping.")
++            public int minimumInactiveTicks = 100;
++            @Comment("Inactive eligible mobs receive one real inactive tick per skip-rate ticks while the region is overloaded.")
++            public int skipRate = 4;
++            @Comment("Maximum skipped inactive ticks tracked on an entity before it must receive another real inactive tick.")
++            public int maxOweTicks = 100;
++            @Comment("Villagers run important inactive AI. Keep this disabled unless you are testing aggressive performance settings.")
++            public boolean includeVillagers = false;
++        }
++
+         public Sniffer sniffer;
+ 
+         public class Sniffer extends ConfigurationPart {

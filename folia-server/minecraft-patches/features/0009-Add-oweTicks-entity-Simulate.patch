@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KnockbackXD <zuka3827@gmail.com>
+Date: Fri, 3 Jul 2026 18:40:59 +0530
+Subject: [PATCH] Add oweTicks entity Simulate
+
+
+diff --git a/io/papermc/paper/threadedregions/OweTicks.java b/io/papermc/paper/threadedregions/OweTicks.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..67f39e4b5e655e823b6f9cd99792419fddeadfe5
+--- /dev/null
++++ b/io/papermc/paper/threadedregions/OweTicks.java
+@@ -0,0 +1,139 @@
++package io.papermc.paper.threadedregions;
++
++import ca.spottedleaf.concurrentutil.scheduler.SchedulableTick;
++import ca.spottedleaf.moonrise.common.time.TickData;
++import io.papermc.paper.configuration.WorldConfiguration;
++import net.minecraft.world.entity.Entity;
++import net.minecraft.world.entity.Mob;
++import net.minecraft.world.entity.npc.villager.Villager;
++
++public final class OweTicks {
++
++    private static final ThreadLocal<PressureCache> PRESSURE_CACHE = ThreadLocal.withInitial(PressureCache::new);
++
++    private OweTicks() {
++    }
++
++    public static boolean shouldSkipInactiveTick(final Entity entity) {
++        final WorldConfiguration.Entities.OweTicks config = entity.level().paperConfig().entities.oweTicks;
++        if (!config.enabled) {
++            entity.oweTicks = 0;
++            return false;
++        }
++
++        if (!isEligible(entity, config)) {
++            entity.oweTicks = 0;
++            return false;
++        }
++
++        final long currentTick = RegionizedServer.getCurrentTick();
++        if ((currentTick - entity.activatedTick) < Math.max(0, config.minimumInactiveTicks)) {
++            forgiveOne(entity);
++            return false;
++        }
++
++        if (!isRegionPressured(config)) {
++            forgiveOne(entity);
++            return false;
++        }
++
++        final int skipRate = Math.max(1, config.skipRate);
++        if (skipRate <= 1) {
++            forgiveOne(entity);
++            return false;
++        }
++
++        final int maxOweTicks = Math.max(1, config.maxOweTicks);
++        if (entity.oweTicks >= maxOweTicks) {
++            forgiveOne(entity);
++            return false;
++        }
++
++        if (Math.floorMod(currentTick + entity.getId(), (long)skipRate) == 0L) {
++            forgiveOne(entity);
++            return false;
++        }
++
++        entity.oweTicks = Math.min(maxOweTicks, entity.oweTicks + 1);
++        return true;
++    }
++
++    private static boolean isEligible(final Entity entity, final WorldConfiguration.Entities.OweTicks config) {
++        if (!(entity instanceof Mob)) {
++            return false;
++        }
++        if (!config.includeVillagers && entity instanceof Villager) {
++            return false;
++        }
++        return !entity.moonrise$hasAnyPlayerPassengers();
++    }
++
++    private static boolean isRegionPressured(final WorldConfiguration.Entities.OweTicks config) {
++        final SchedulableTick task = TickRegionScheduler.getCurrentTickingTask();
++        if (!(task instanceof final TickRegionScheduler.RegionScheduleHandle handle) || handle.region == null) {
++            return false;
++        }
++
++        final long currentTick = handle.getCurrentTick();
++        final double triggerMspt = Math.max(0.0D, config.triggerMspt);
++        final double triggerTps = Math.max(0.0D, config.triggerTps);
++        final PressureCache cache = PRESSURE_CACHE.get();
++        if (cache.matches(handle, currentTick, triggerMspt, triggerTps)) {
++            return cache.pressured;
++        }
++
++        boolean pressured = false;
++        final TickData.TickReportData report = handle.getTickReport5s(System.nanoTime());
++        if (report != null) {
++            final double mspt = report.timePerTickData().segmentAll().average() / 1.0E6D;
++            final double tps = report.tpsData().segmentAll().average();
++            pressured = (triggerMspt > 0.0D && mspt >= triggerMspt) || (triggerTps > 0.0D && tps <= triggerTps);
++        }
++
++        cache.update(handle, currentTick, triggerMspt, triggerTps, pressured);
++        return pressured;
++    }
++
++    private static void forgiveOne(final Entity entity) {
++        if (entity.oweTicks > 0) {
++            --entity.oweTicks;
++        } else if (entity.oweTicks < 0) {
++            entity.oweTicks = 0;
++        }
++    }
++
++    private static final class PressureCache {
++
++        private TickRegionScheduler.RegionScheduleHandle handle;
++        private long currentTick = Long.MIN_VALUE;
++        private double triggerMspt;
++        private double triggerTps;
++        private boolean pressured;
++
++        private boolean matches(
++            final TickRegionScheduler.RegionScheduleHandle handle,
++            final long currentTick,
++            final double triggerMspt,
++            final double triggerTps
++        ) {
++            return this.handle == handle
++                && this.currentTick == currentTick
++                && Double.compare(this.triggerMspt, triggerMspt) == 0
++                && Double.compare(this.triggerTps, triggerTps) == 0;
++        }
++
++        private void update(
++            final TickRegionScheduler.RegionScheduleHandle handle,
++            final long currentTick,
++            final double triggerMspt,
++            final double triggerTps,
++            final boolean pressured
++        ) {
++            this.handle = handle;
++            this.currentTick = currentTick;
++            this.triggerMspt = triggerMspt;
++            this.triggerTps = triggerTps;
++            this.pressured = pressured;
++        }
++    }
++}
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 3471200d54b938ef82f142efc2fcb096d72ec7b4..9c2457cf4339d75e793b7de46ad2f0941222165b 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1452,7 +1452,7 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+             return;
+         }
+         // Folia end - region threading
+-        } else {entity.inactiveTick();} // Paper - EAR 2
++        } else if (!io.papermc.paper.threadedregions.OweTicks.shouldSkipInactiveTick(entity)) {entity.inactiveTick();} // Paper - EAR 2 // Folia - oweTicks
+         profilerFiller.pop();
+         } finally { profiler.stopTimer(timerId); } // Folia - profiler
+ 
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index a298b9babb6b42ff31781808821acd28918d7cb7..16795ea25ed98fd0fb1f9213c71dffd632ac86aa 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -373,6 +373,7 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+     public long activatedTick = Integer.MIN_VALUE;
+     public boolean isTemporarilyActive;
+     public long activatedImmunityTick = Integer.MIN_VALUE;
++    public int oweTicks; // Folia - oweTicks
+ 
+     public void inactiveTick() {
+     }
